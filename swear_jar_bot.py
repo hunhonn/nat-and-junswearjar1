@@ -15,7 +15,7 @@ from telegram.ext import (
 # ======================
 # CONFIG
 # ======================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "7865993150:AAEtKJIrbFyUJt8PIH8r6NslcdSCUBHa-bI")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 # Optional: restrict to only you two
@@ -33,24 +33,19 @@ def get_db_connection():
 
 def init_db():
     if not DATABASE_URL:
-        print("⚠️  DATABASE_URL not set - skipping table creation")
-        return
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS balances (
-            telegram_id BIGINT PRIMARY KEY,
-            name TEXT,
-            amount DECIMAL DEFAULT 0
-        )
-        """)
-        conn.commit()
-        c.close()
-        conn.close()
-        print("✅ Database ready")
-    except Exception as e:
-        print(f"⚠️  Database init error: {e}")
+        raise ValueError("DATABASE_URL environment variable not set")
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS balances (
+        telegram_id BIGINT PRIMARY KEY,
+        name TEXT,
+        amount DECIMAL DEFAULT 0
+    )
+    """)
+    conn.commit()
+    c.close()
+    conn.close()
 
 # ======================
 # UI HELPERS
