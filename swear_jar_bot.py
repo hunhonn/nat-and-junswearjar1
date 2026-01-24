@@ -32,6 +32,8 @@ def get_db_connection():
     return psycopg2.connect(DATABASE_URL)
 
 def init_db():
+    if not DATABASE_URL:
+        raise ValueError("DATABASE_URL environment variable not set")
     conn = get_db_connection()
     c = conn.cursor()
     c.execute("""
@@ -44,8 +46,6 @@ def init_db():
     conn.commit()
     c.close()
     conn.close()
-
-init_db()
 
 # ======================
 # UI HELPERS
@@ -146,6 +146,8 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # ======================
 def main():
+    init_db()
+    
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
