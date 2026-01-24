@@ -71,9 +71,9 @@ def get_scoreboard():
     conn.close()
 
     if not rows:
-        return "💸 Swear Jar\n\nNo swears yet 😇"
+        return "Swear Jar\n\nNo swears yet 😇"
 
-    text = "💸 Swear Jar\n\n"
+    text = "Swear Jar\n\n"
     for name, amount in rows:
         text += f"{name}: ${amount}\n"
     return text
@@ -110,7 +110,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Restrict users if configured
     if ALLOWED_USERS and user.id not in ALLOWED_USERS:
-        await query.answer("Nice try 😏", show_alert=True)
+        await query.answer("Not authorized", show_alert=True)
         return
 
     delta = 0.05 if query.data == "plus" else -0.05
