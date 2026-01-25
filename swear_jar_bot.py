@@ -55,6 +55,9 @@ def get_keyboard():
         [
             InlineKeyboardButton("➕", callback_data="plus"),
             InlineKeyboardButton("➖", callback_data="minus")
+        ],
+        [
+            InlineKeyboardButton("Settle Up!", callback_data="settle")
         ]
     ])
 
@@ -113,6 +116,47 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Not authorized", show_alert=True)
         return
 
+    # Handle settle up confirmation
+    if query.data == "settle":
+        confirm_keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Yes, Settle Up", callback_data="settle_confirm"),
+                InlineKeyboardButton("Cancel", callback_data="settle_cancel")
+            ]
+        ])
+        await query.edit_message_text(
+            text=f"{get_scoreboard()}\n\n{user.first_name}, reset your balance to $0?",
+            reply_markup=confirm_keyboard
+        )
+        return
+
+    # Handle settle up confirmation
+    if query.data == "settle_confirm":
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("""
+            UPDATE balances
+            SET amount = 0
+            WHERE telegram_id = %s
+        """, (user.id,))
+        conn.commit()
+        c.close()
+        conn.close()
+        await query.edit_message_text(
+            text=get_scoreboard(),
+            reply_markup=get_keyboard()
+        )
+        return
+
+    # Handle cancel
+    if query.data == "settle_cancel":
+        await query.edit_message_text(
+            text=get_scoreboard(),
+            reply_markup=get_keyboard()
+        )
+        return
+
+    # Handle +/- buttons
     delta = 0.05 if query.data == "plus" else -0.05
 
     conn = get_db_connection()
