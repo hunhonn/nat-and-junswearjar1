@@ -1,5 +1,6 @@
 import psycopg2
 import os
+import asyncio
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -445,20 +446,33 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c.close()
         conn.close()
         
+        # Get the message ID from reply_to_message to update the scoreboard
+        message_id_to_update = None
+        if update.message.reply_to_message:
+            message_id_to_update = update.message.reply_to_message.message_id
+        
         # Clear context
         context.user_data.pop('proxy_to_user_id', None)
         context.user_data.pop('awaiting_proxy_amount', None)
         
-        # Get main chat message and update it
-        try:
-            main_message = await context.bot.get_message(chat_id, update.message.reply_to_message.message_id) if update.message.reply_to_message else None
-        except:
-            main_message = None
+        # Update the original message with the scoreboard
+        if message_id_to_update:
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id_to_update,
+                    text=get_scoreboard(chat_id),
+                    reply_markup=get_keyboard()
+                )
+            except:
+                pass
         
-        # Send confirmation to user
-        await update.message.reply_text(
-            f"Added {swears} swears (${amount}) pending for {to_user_name}\n\nThey need to confirm to add it to their balance."
+        # Send temporary confirmation message that deletes after 5 seconds
+        confirmation_msg = await update.message.reply_text(
+            f"Added {swears} swears (${amount}) pending for {to_user_name}"
         )
+        await asyncio.sleep(5)
+        await confirmation_msg.delete()
         
     except ValueError:
         await update.message.reply_text("Please enter a valid number!")
