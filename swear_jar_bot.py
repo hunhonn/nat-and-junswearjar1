@@ -38,9 +38,11 @@ def init_db():
     c = conn.cursor()
     c.execute("""
     CREATE TABLE IF NOT EXISTS balances (
-        telegram_id BIGINT PRIMARY KEY,
+        telegram_id BIGINT,
+        chat_id BIGINT,
         name TEXT,
-        amount DECIMAL DEFAULT 0
+        amount DECIMAL DEFAULT 0,
+        PRIMARY KEY (telegram_id, chat_id)
     )
     """)
     conn.commit()
@@ -61,14 +63,15 @@ def get_keyboard():
         ]
     ])
 
-def get_scoreboard():
+def get_scoreboard(chat_id):
     conn = get_db_connection()
     c = conn.cursor()
     c.execute("""
         SELECT name, amount
         FROM balances
+        WHERE chat_id = %s
         ORDER BY amount DESC
-    """)
+    """, (chat_id,))
     rows = c.fetchall()
     c.close()
     conn.close()
@@ -88,8 +91,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Run once to create & pin the swear jar message
     """
+    chat_id = update.effective_chat.id
     message = await update.message.reply_text(
-        get_scoreboard(),
+        get_scoreboard(chat_id),
         reply_markup=get_keyboard()
     )
 
@@ -110,6 +114,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     user = query.from_user
+    chat_id = query.message.chat_id
 
     # Restrict users if configured
     if ALLOWED_USERS and user.id not in ALLOWED_USERS:
@@ -125,7 +130,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         ])
         await query.edit_message_text(
-            text=f"{get_scoreboard()}\n\n{user.first_name}, reset your balance to $0?",
+            text=f"{get_scoreboard(chat_id)}\n\n{user.first_name}, reset your balance to $0?",
             reply_markup=confirm_keyboard
         )
         return
@@ -137,13 +142,13 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c.execute("""
             UPDATE balances
             SET amount = 0
-            WHERE telegram_id = %s
-        """, (user.id,))
+            WHERE telegram_id = %s AND chat_id = %s
+        """, (user.id, chat_id))
         conn.commit()
         c.close()
         conn.close()
         await query.edit_message_text(
-            text=get_scoreboard(),
+            text=get_scoreboard(chat_id),
             reply_markup=get_keyboard()
         )
         return
@@ -151,7 +156,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Handle cancel
     if query.data == "settle_cancel":
         await query.edit_message_text(
-            text=get_scoreboard(),
+            text=get_scoreboard(chat_id),
             reply_markup=get_keyboard()
         )
         return
@@ -164,17 +169,17 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Ensure user exists
     c.execute("""
-        INSERT INTO balances (telegram_id, name, amount)
-        VALUES (%s, %s, 0)
-        ON CONFLICT (telegram_id) DO NOTHING
-    """, (user.id, user.first_name))
+        INSERT INTO balances (telegram_id, chat_id, name, amount)
+        VALUES (%s, %s, %s, 0)
+        ON CONFLICT (telegram_id, chat_id) DO NOTHING
+    """, (user.id, chat_id, user.first_name))
 
     # Update balance (never below 0)
     c.execute("""
         UPDATE balances
         SET amount = GREATEST(amount + %s, 0)
-        WHERE telegram_id = %s
-    """, (delta, user.id))
+        WHERE telegram_id = %s AND chat_id = %s
+    """, (delta, user.id, chat_id))
 
     conn.commit()
     c.close()
@@ -182,7 +187,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Update the same message
     await query.edit_message_text(
-        text=get_scoreboard(),
+        text=get_scoreboard(chat_id),
         reply_markup=get_keyboard()
     )
 
