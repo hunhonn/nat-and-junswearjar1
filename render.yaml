@@ -9,9 +9,7 @@ services:
       - key: BOT_TOKEN
         sync: false
       - key: DATABASE_URL
-        fromDatabase:
-          name: swear-jar-db
-          property: connectionString
+        sync: false
 
 databases:
   - name: swear-jar-db
