@@ -491,7 +491,11 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("Swear Jar Bot is running...")
-    app.run_polling()
+    app.run_webhook(
+    listen="0.0.0.0",
+    port=int(os.getenv("PORT", 10000)),
+    webhook_url=f"https://your-app.onrender.com/{BOT_TOKEN}"
+)
 
 if __name__ == "__main__":
     main()
