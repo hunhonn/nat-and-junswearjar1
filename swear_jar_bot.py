@@ -491,11 +491,33 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("Swear Jar Bot is running...")
-    app.run_webhook(
-    listen="0.0.0.0",
-    port=int(os.getenv("PORT", 10000)),
-    webhook_url=f"https://your-app.onrender.com/{BOT_TOKEN}"
-)
+    # Render: prefer explicit WEBHOOK_URL, else build from Render hostname.
+    render_hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME")
+    webhook_base = os.getenv("WEBHOOK_URL") or (
+        f"https://{render_hostname}" if render_hostname else None
+    )
+
+    if webhook_base:
+        # Python 3.14 no longer provides a default event loop in main thread.
+        # PTB still expects one for run_webhook/run_polling internals.
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
+
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=int(os.getenv("PORT", 10000)),
+            webhook_url=f"{webhook_base.rstrip('/')}/{BOT_TOKEN}"
+        )
+    else:
+        # Local/dev fallback
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
+
+        app.run_polling()
 
 if __name__ == "__main__":
     main()
