@@ -1,6 +1,7 @@
 import psycopg2
 import os
 import asyncio
+import logging
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -20,6 +21,12 @@ from telegram.ext import (
 # ======================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 # Optional: restrict to only you two
 # Leave empty {} to allow anyone
@@ -132,6 +139,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
+    logger.info("/start received from user_id=%s chat_id=%s", user_id, chat_id)
     
     # Check for pending transactions for this user
     conn = get_db_connection()
@@ -190,6 +198,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = query.from_user
     chat_id = query.message.chat_id
+    logger.info("button '%s' from user_id=%s chat_id=%s", query.data, user.id, chat_id)
 
     # Restrict users if configured
     if ALLOWED_USERS and user.id not in ALLOWED_USERS:
@@ -407,6 +416,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle text messages for proxy add amount input"""
     user = update.effective_user
     chat_id = update.effective_chat.id
+    logger.info("message received from user_id=%s chat_id=%s text=%s", user.id, chat_id, update.message.text)
     
     # Restrict users if configured
     if ALLOWED_USERS and user.id not in ALLOWED_USERS:
@@ -478,6 +488,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Please enter a valid number!")
         return
 
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.exception("Unhandled bot error", exc_info=context.error)
+
 # ======================
 # MAIN
 # ======================
@@ -489,6 +503,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_button))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_error_handler(error_handler)
 
     print("Swear Jar Bot is running...")
     # Render: prefer explicit WEBHOOK_URL, else build from Render hostname.
@@ -505,9 +520,11 @@ def main():
         except RuntimeError:
             asyncio.set_event_loop(asyncio.new_event_loop())
 
+        logger.info("Starting webhook mode. base=%s", webhook_base)
         app.run_webhook(
             listen="0.0.0.0",
             port=int(os.getenv("PORT", 10000)),
+            url_path=BOT_TOKEN,
             webhook_url=f"{webhook_base.rstrip('/')}/{BOT_TOKEN}"
         )
     else:
@@ -517,6 +534,7 @@ def main():
         except RuntimeError:
             asyncio.set_event_loop(asyncio.new_event_loop())
 
+        logger.info("Starting polling mode")
         app.run_polling()
 
 if __name__ == "__main__":
