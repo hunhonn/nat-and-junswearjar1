@@ -85,6 +85,29 @@ def get_keyboard():
         ]
     ])
 
+
+def get_proxy_amount_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("➕", callback_data="proxy_plus"),
+            InlineKeyboardButton("➖", callback_data="proxy_minus")
+        ],
+        [
+            InlineKeyboardButton("Confirm", callback_data="proxy_confirm"),
+            InlineKeyboardButton("Cancel", callback_data="proxy_cancel")
+        ]
+    ])
+
+
+def get_proxy_amount_text(to_user_name, swear_count):
+    amount = swear_count * 0.05
+    return (
+        f"How many swears to add for {to_user_name}?\n\n"
+        f"Swears: {swear_count}\n"
+        f"Amount: ${amount:.2f}\n\n"
+        "Use ➕ / ➖, then tap Confirm."
+    )
+
 def get_scoreboard(chat_id):
     conn = get_db_connection()
     c = conn.cursor()
@@ -248,20 +271,91 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         to_user_name = result[0] if result else "Unknown"
         c.close()
         conn.close()
+
+        context.user_data['proxy_to_user_name'] = to_user_name
+        context.user_data['proxy_swear_count'] = 0
         
-        # Show input prompt
+        # Show separate proxy amount picker view
         await query.edit_message_text(
-            text=f"How many swears for {to_user_name}?\n\nReply with a number (e.g., 5 for $0.25)",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data="proxy_cancel")]])
+            text=get_proxy_amount_text(to_user_name, 0),
+            reply_markup=get_proxy_amount_keyboard()
         )
-        
-        # Enable message handler for input
-        context.user_data['awaiting_proxy_amount'] = True
+        return
+
+    if query.data == "proxy_plus":
+        to_user_id = context.user_data.get('proxy_to_user_id')
+        to_user_name = context.user_data.get('proxy_to_user_name', 'Unknown')
+        if not to_user_id:
+            await query.answer("No proxy action in progress", show_alert=True)
+            return
+
+        swear_count = int(context.user_data.get('proxy_swear_count', 0)) + 1
+        context.user_data['proxy_swear_count'] = swear_count
+        await query.edit_message_text(
+            text=get_proxy_amount_text(to_user_name, swear_count),
+            reply_markup=get_proxy_amount_keyboard()
+        )
+        return
+
+    if query.data == "proxy_minus":
+        to_user_id = context.user_data.get('proxy_to_user_id')
+        to_user_name = context.user_data.get('proxy_to_user_name', 'Unknown')
+        if not to_user_id:
+            await query.answer("No proxy action in progress", show_alert=True)
+            return
+
+        swear_count = max(int(context.user_data.get('proxy_swear_count', 0)) - 1, 0)
+        context.user_data['proxy_swear_count'] = swear_count
+        await query.edit_message_text(
+            text=get_proxy_amount_text(to_user_name, swear_count),
+            reply_markup=get_proxy_amount_keyboard()
+        )
+        return
+
+    if query.data == "proxy_confirm":
+        to_user_id = context.user_data.get('proxy_to_user_id')
+        to_user_name = context.user_data.get('proxy_to_user_name', 'Unknown')
+        swear_count = int(context.user_data.get('proxy_swear_count', 0))
+
+        if not to_user_id:
+            await query.answer("No proxy action in progress", show_alert=True)
+            return
+
+        if swear_count <= 0:
+            await query.answer("Please add at least 1 swear", show_alert=True)
+            return
+
+        amount = swear_count * 0.05
+
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO pending_transactions (from_user_id, from_user_name, to_user_id, chat_id, amount)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (user.id, user.first_name, to_user_id, chat_id, amount))
+
+        conn.commit()
+        c.close()
+        conn.close()
+
+        # Clear context
+        context.user_data.pop('proxy_to_user_id', None)
+        context.user_data.pop('proxy_to_user_name', None)
+        context.user_data.pop('proxy_swear_count', None)
+        context.user_data.pop('awaiting_proxy_amount', None)
+
+        await query.edit_message_text(
+            text=get_scoreboard(chat_id),
+            reply_markup=get_keyboard()
+        )
+        await query.answer(f"Added {swear_count} swears (${amount:.2f}) pending for {to_user_name}", show_alert=True)
         return
     
     # Handle proxy cancel
     if query.data == "proxy_cancel":
         context.user_data.pop('proxy_to_user_id', None)
+        context.user_data.pop('proxy_to_user_name', None)
+        context.user_data.pop('proxy_swear_count', None)
         context.user_data.pop('awaiting_proxy_amount', None)
         await query.edit_message_text(
             text=get_scoreboard(chat_id),
@@ -383,6 +477,9 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Handle +/- buttons
+    if query.data not in {"plus", "minus"}:
+        return
+
     delta = 0.05 if query.data == "plus" else -0.05
 
     conn = get_db_connection()
@@ -413,7 +510,7 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle text messages for proxy add amount input"""
+    """Handle text messages (proxy amount is now button-based)."""
     user = update.effective_user
     chat_id = update.effective_chat.id
     logger.info("message received from user_id=%s chat_id=%s text=%s", user.id, chat_id, update.message.text)
@@ -422,70 +519,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ALLOWED_USERS and user.id not in ALLOWED_USERS:
         return
     
-    # Check if we're waiting for proxy amount input
-    if not context.user_data.get('awaiting_proxy_amount'):
-        return
-    
-    to_user_id = context.user_data.get('proxy_to_user_id')
-    if not to_user_id:
-        return
-    
-    try:
-        # Parse the amount (number of swears)
-        swears = int(update.message.text)
-        if swears <= 0:
-            await update.message.reply_text("Please enter a positive number!")
-            return
-        
-        amount = swears * 0.05
-        
-        # Get the recipient's name
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT name FROM balances WHERE telegram_id = %s", (to_user_id,))
-        result = c.fetchone()
-        to_user_name = result[0] if result else "Unknown"
-        
-        # Create pending transaction
-        c.execute("""
-            INSERT INTO pending_transactions (from_user_id, from_user_name, to_user_id, chat_id, amount)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (user.id, user.first_name, to_user_id, chat_id, amount))
-        
-        conn.commit()
-        c.close()
-        conn.close()
-        
-        # Get the message ID from reply_to_message to update the scoreboard
-        message_id_to_update = None
-        if update.message.reply_to_message:
-            message_id_to_update = update.message.reply_to_message.message_id
-        
-        # Clear context
-        context.user_data.pop('proxy_to_user_id', None)
-        context.user_data.pop('awaiting_proxy_amount', None)
-        
-        # Update the original message with the scoreboard
-        if message_id_to_update:
-            try:
-                await context.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id_to_update,
-                    text=get_scoreboard(chat_id),
-                    reply_markup=get_keyboard()
-                )
-            except:
-                pass
-        
-        # Send temporary confirmation message that deletes after 5 seconds
-        confirmation_msg = await update.message.reply_text(
-            f"Added {swears} swears (${amount}) pending for {to_user_name}"
-        )
-        await asyncio.sleep(5)
-        await confirmation_msg.delete()
-        
-    except ValueError:
-        await update.message.reply_text("Please enter a valid number!")
+    if context.user_data.get('proxy_to_user_id'):
+        await update.message.reply_text("Use the ➕ / ➖ buttons and tap Confirm in the proxy view.")
         return
 
 
