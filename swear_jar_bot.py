@@ -2,6 +2,7 @@ import psycopg2
 import os
 import asyncio
 import logging
+from aiohttp import web
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -530,47 +531,84 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 # ======================
 # MAIN
 # ======================
-def main():
+async def run():
     init_db()
-    
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(handle_button))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_error_handler(error_handler)
-
-    print("Swear Jar Bot is running...")
-    # Render: prefer explicit WEBHOOK_URL, else build from Render hostname.
     render_hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME")
     webhook_base = os.getenv("WEBHOOK_URL") or (
         f"https://{render_hostname}" if render_hostname else None
     )
 
     if webhook_base:
-        # Python 3.14 no longer provides a default event loop in main thread.
-        # PTB still expects one for run_webhook/run_polling internals.
-        try:
-            asyncio.get_event_loop()
-        except RuntimeError:
-            asyncio.set_event_loop(asyncio.new_event_loop())
-
-        logger.info("Starting webhook mode. base=%s", webhook_base)
-        app.run_webhook(
-            listen="0.0.0.0",
-            port=int(os.getenv("PORT", 10000)),
-            url_path=BOT_TOKEN,
-            webhook_url=f"{webhook_base.rstrip('/')}/{BOT_TOKEN}"
+        # --- Webhook mode (Render) ---
+        # Build without PTB's built-in updater so we control the aiohttp server
+        # ourselves. This lets us add a health-check route for uptime bots.
+        ptb_app = (
+            ApplicationBuilder()
+            .token(BOT_TOKEN)
+            .updater(None)
+            .build()
         )
+
+        ptb_app.add_handler(CommandHandler("start", start))
+        ptb_app.add_handler(CallbackQueryHandler(handle_button))
+        ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        ptb_app.add_error_handler(error_handler)
+
+        PORT = int(os.getenv("PORT", 10000))
+        webhook_url = f"{webhook_base.rstrip('/')}/{BOT_TOKEN}"
+
+        # Health-check handler — uptime bots (UptimeRobot, etc.) ping GET /
+        async def health(request):
+            return web.Response(text="OK")
+
+        # Telegram webhook handler — Telegram sends POST /{token}
+        async def telegram_webhook(request):
+            from telegram import Update as TGUpdate
+            data = await request.json()
+            update = TGUpdate.de_json(data, ptb_app.bot)
+            await ptb_app.update_queue.put(update)
+            return web.Response(text="OK")
+
+        aiohttp_app = web.Application()
+        aiohttp_app.router.add_get("/", health)
+        aiohttp_app.router.add_get("/health", health)
+        aiohttp_app.router.add_post(f"/{BOT_TOKEN}", telegram_webhook)
+
+        async with ptb_app:
+            await ptb_app.start()
+            await ptb_app.bot.set_webhook(url=webhook_url)
+            logger.info("Webhook set to %s", webhook_url)
+
+            runner = web.AppRunner(aiohttp_app)
+            await runner.setup()
+            site = web.TCPSite(runner, "0.0.0.0", PORT)
+            await site.start()
+            logger.info("Swear Jar Bot running on port %d (webhook + health check)", PORT)
+
+            # Run until interrupted
+            await asyncio.Event().wait()
+
+            await runner.cleanup()
+            await ptb_app.stop()
+
     else:
-        # Local/dev fallback
-        try:
-            asyncio.get_event_loop()
-        except RuntimeError:
-            asyncio.set_event_loop(asyncio.new_event_loop())
+        # --- Polling mode (local dev) ---
+        ptb_app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+        ptb_app.add_handler(CommandHandler("start", start))
+        ptb_app.add_handler(CallbackQueryHandler(handle_button))
+        ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        ptb_app.add_error_handler(error_handler)
 
         logger.info("Starting polling mode")
-        app.run_polling()
+        print("Swear Jar Bot is running (polling)...")
+        ptb_app.run_polling()
+
+
+def main():
+    asyncio.run(run())
+
 
 if __name__ == "__main__":
     main()
